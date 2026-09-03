@@ -1,0 +1,348 @@
+## Easy UiPath REFramework Practice Project: Employee Data Validator
+
+Build a process that reads employee records from an Excel file, validates each record, and writes the result to an output Excel file. Each employee will be processed as one transaction in REFramework.
+
+### Project objective
+
+For every employee:
+
+1. Read the employee data.
+2. Validate required fields.
+3. Check whether the email address is valid.
+4. Write either `Processed` or `Failed` status.
+5. Continue processing even if one employee causes an error.
+
+### Sample input file: `Employees.xlsx`
+
+Create an Excel file with this sheet:
+
+| EmployeeID | Name | Email | Department | Salary |
+|---|---|---|---|---:|
+| E001 | John Smith | john@example.com | IT | 50000 |
+| E002 | Mary Jones | mary@example.com | HR | 45000 |
+| E003 | David Brown | davidexample.com | Finance | 55000 |
+| E004 |  | lisa@example.com | Sales | 40000 |
+| E005 | Robert White | robert@example.com | IT | -1000 |
+
+Expected results:
+
+| EmployeeID | Name | Status | Remarks |
+|---|---|---|---|
+| E001 | John Smith | Processed | Valid employee |
+| E002 | Mary Jones | Processed | Valid employee |
+| E003 | David Brown | Failed | Invalid email |
+| E004 |  | Failed | Name is missing |
+| E005 | Robert White | Failed | Salary must be greater than zero |
+
+## REFramework workflow design
+
+Create a new project using:
+
+**New → Process → Robotic Enterprise Framework**
+
+Use these files:
+
+| REFramework file | Purpose in this project |
+|---|---|
+| `InitAllApplications.xaml` | Open the input file and prepare variables |
+| `GetTransactionData.xaml` | Get one employee row |
+| `Process.xaml` | Validate the current employee |
+| `SetTransactionStatus.xaml` | Mark the transaction as successful or failed |
+| `CloseAllApplications.xaml` | Save and close files |
+
+## Main arguments and variables
+
+Create these variables:
+
+| Variable | Type | Purpose |
+|---|---|---|
+| `dtEmployees` | `DataTable` | Stores input employee data |
+| `dtResults` | `DataTable` | Stores validation results |
+| `in_TransactionItem` | `QueueItem` or `DataRow` | Current employee transaction |
+| `TransactionNumber` | `Int32` | Current row number |
+| `EmployeeID` | `String` | Current employee ID |
+| `Name` | `String` | Current employee name |
+| `Email` | `String` | Current employee email |
+| `Department` | `String` | Current department |
+| `Salary` | `Double` | Current salary |
+| `ValidationMessage` | `String` | Error or success message |
+
+For a beginner-friendly version, use a `DataTable` instead of Orchestrator queues.
+
+## 1. `InitAllApplications.xaml`
+
+Add these activities:
+
+1. **Use Excel File**
+   - File path: `Data\Employees.xlsx`
+
+2. **Read Range**
+   - Sheet: `Sheet1`
+   - Range: empty
+   - Output: `dtEmployees`
+
+3. **Build Data Table**
+   - Create `dtResults` with these columns:
+     - `EmployeeID`
+     - `Name`
+     - `Status`
+     - `Remarks`
+
+4. Set:
+
+```vb
+TransactionNumber = 0
+```
+
+You can place the Excel activities inside a `Use Excel File` activity and keep the workbook open during processing.
+
+## 2. `GetTransactionData.xaml`
+
+The purpose is to retrieve one employee row at a time.
+
+Use an **If** activity:
+
+```vb
+TransactionNumber < dtEmployees.Rows.Count
+```
+
+### Then branch
+
+Assign the current transaction:
+
+```vb
+out_TransactionItem = dtEmployees.Rows(TransactionNumber)
+```
+
+Then increment the transaction counter:
+
+```vb
+TransactionNumber = TransactionNumber + 1
+```
+
+### Else branch
+
+Set:
+
+```vb
+out_TransactionItem = Nothing
+```
+
+This tells REFramework that there are no more transactions.
+
+If your template expects a `QueueItem`, you can adapt the logic by adding the Excel rows to an Orchestrator queue during initialization. However, using `DataRow` is easier for practice.
+
+## 3. `Process.xaml`
+
+This is the main business logic.
+
+First, retrieve values from the current row:
+
+```vb
+EmployeeID = in_TransactionItem("EmployeeID").ToString.Trim
+Name = in_TransactionItem("Name").ToString.Trim
+Email = in_TransactionItem("Email").ToString.Trim
+Department = in_TransactionItem("Department").ToString.Trim
+```
+
+Convert salary:
+
+```vb
+Salary = CDbl(in_TransactionItem("Salary"))
+```
+
+Then use an **If / Else If** sequence.
+
+### Validation conditions
+
+#### Check Employee ID
+
+```vb
+String.IsNullOrWhiteSpace(EmployeeID)
+```
+
+If true:
+
+```vb
+ValidationMessage = "Employee ID is missing"
+```
+
+Throw a business exception:
+
+```vb
+Throw New BusinessRuleException(ValidationMessage)
+```
+
+#### Check name
+
+```vb
+String.IsNullOrWhiteSpace(Name)
+```
+
+If true:
+
+```vb
+ValidationMessage = "Name is missing"
+Throw New BusinessRuleException(ValidationMessage)
+```
+
+#### Check email
+
+```vb
+Not System.Text.RegularExpressions.Regex.IsMatch(
+    Email,
+    "^[^@\s]+@[^@\s]+\.[^@\s]+$"
+)
+```
+
+If true:
+
+```vb
+ValidationMessage = "Invalid email"
+Throw New BusinessRuleException(ValidationMessage)
+```
+
+#### Check department
+
+```vb
+String.IsNullOrWhiteSpace(Department)
+```
+
+If true:
+
+```vb
+ValidationMessage = "Department is missing"
+Throw New BusinessRuleException(ValidationMessage)
+```
+
+#### Check salary
+
+```vb
+Salary <= 0
+```
+
+If true:
+
+```vb
+ValidationMessage = "Salary must be greater than zero"
+Throw New BusinessRuleException(ValidationMessage)
+```
+
+### Successful transaction
+
+If all validations pass:
+
+```vb
+ValidationMessage = "Valid employee"
+```
+
+Add a row to `dtResults`:
+
+```vb
+dtResults.Rows.Add(EmployeeID, Name, "Processed", ValidationMessage)
+```
+
+## 4. Handling failed transactions
+
+Inside `SetTransactionStatus.xaml`, use the status provided by REFramework.
+
+For a failed business transaction, add the current employee to the result table:
+
+```vb
+dtResults.Rows.Add(
+    EmployeeID,
+    Name,
+    "Failed",
+    exception.Message
+)
+```
+
+You can classify errors like this:
+
+- `BusinessRuleException`: invalid employee data
+- `System.Exception`: unexpected technical error
+
+For a technical error, use:
+
+```vb
+dtResults.Rows.Add(
+    EmployeeID,
+    Name,
+    "Failed",
+    "System error: " + exception.Message
+)
+```
+
+A simple way to avoid duplicate result rows is to add the result only in `Process.xaml` after validation, using a local status variable. Alternatively, handle success and failure entirely in `SetTransactionStatus.xaml`.
+
+## 5. `CloseAllApplications.xaml`
+
+Add:
+
+1. **Write Range**
+   - File: `Data\Employees.xlsx`
+   - Sheet: `Results`
+   - DataTable: `dtResults`
+
+2. Optionally add:
+   - **Save Excel File**
+   - **Close Application**
+   - A log message such as:
+
+```vb
+"Employee validation completed"
+```
+
+## Recommended REFramework configuration
+
+In `Config.xlsx`, add:
+
+| Key | Value |
+|---|---|
+| `InputFilePath` | `Data\Employees.xlsx` |
+| `OutputSheetName` | `Results` |
+| `MaxRetryNumber` | `2` |
+
+Then read the values from the Config dictionary rather than hardcoding paths.
+
+For example:
+
+```vb
+Config("InputFilePath").ToString
+```
+
+## Suggested project folder structure
+
+```text
+EmployeeValidator
+│
+├── Main.xaml
+├── Framework
+│   ├── InitAllApplications.xaml
+│   ├── GetTransactionData.xaml
+│   ├── Process.xaml
+│   ├── SetTransactionStatus.xaml
+│   └── CloseAllApplications.xaml
+│
+├── Data
+│   ├── Employees.xlsx
+│   └── Config.xlsx
+│
+└── Output
+    └── ValidationResults.xlsx
+```
+
+## Practice exercises
+
+After completing the basic version, add these improvements:
+
+1. Move valid employees to a separate `ValidEmployees` sheet.
+2. Move invalid employees to an `InvalidEmployees` sheet.
+3. Add a `ProcessedDate` column.
+4. Send an email when processing is complete.
+5. Add retry logic for technical exceptions.
+6. Create an Orchestrator queue called `EmployeeValidationQueue`.
+7. Add screenshots or logs for failed transactions.
+8. Make the input file path configurable from `Config.xlsx`.
+
+This project is small enough to finish quickly but demonstrates the main REFramework concepts: initialization, transaction retrieval, business processing, exception handling, retry behavior, transaction status, logging, and cleanup.
